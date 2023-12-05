@@ -16,46 +16,12 @@ class TfIdf:
                                     usecols=['movieId', 'genres'],
                                     dtype={'movieId': 'int32', 'genres': 'str'})
 
-        self.rating_df = pd.read_csv("./data/rating.csv",
-                                     usecols=['userId', 'movieId', 'rating'],
-                                     dtype={'userId': 'int32', 'movieId': 'int32', 'rating': 'float32'})
-        df_ratings_cleaned = self.clean_data()
-        self.movie_user_mat = df_ratings_cleaned.pivot(index='movieId', columns='userId', values='rating').fillna(0)
-
         # O(n) for
         # dict with key value pairs, key being movieId, value is movie title
         self.movie_to_index = {
             movie: i for i, movie in
-            enumerate(list(self.movie_title_df.set_index('movieId').loc[self.movie_user_mat.index].title))
+            enumerate(list(self.movie_title_df.set_index('movieId').loc[self.movie_title_df.movieId].title))
         }
-
-    # O(nlogn), groupby() is like sorting for pandas dataframes
-    def clean_data(self, popularity_threshold=40, ratings_threshold=40):
-        df_movies_count = (
-            self.rating_df.groupby('movieId').size().reset_index(name='count')
-        )
-
-        popular_movies = (
-            df_movies_count[df_movies_count['count'] >= popularity_threshold]['movieId'].tolist()
-        )
-
-        df_ratings_drop_movies = (
-            self.rating_df[self.rating_df['movieId'].isin(popular_movies)]
-        )
-
-        df_users_count = (
-            df_ratings_drop_movies.groupby('userId').size().reset_index(name='count')
-        )
-
-        active_users = (
-            df_users_count[df_users_count['count'] >= ratings_threshold]['userId'].tolist()
-        )
-
-        df_ratings_drop_users = (
-            df_ratings_drop_movies[df_ratings_drop_movies['userId'].isin(active_users)]
-        )
-        # Movies that have enough ratings and without users that give a small amount of ratings
-        return df_ratings_drop_users
 
     # O(n^3) for this function
     def fuzzy_matching(self, fav_movie):
@@ -95,25 +61,30 @@ class TfIdf:
         idf = np.log10(num_movies / df)  # inverse document frequency
         return idf
 
-    # O(n*m), because O(n*m) + O(n*m) + O(n*k) ~ O(n*m) with .mul
+    # O(n^2*m^2) with .mul
     # which has O(n*k) where n is number of elements in the first dataframe
     # and k is number of elements in the second dataframe
     def tf_idf(self):
         return self.genre_tf().mul(self.genre_idf(), axis=1)
 
-    # Worst Case is O(m*n) due to the similarity calculation
-    def get_movie_recommendations(self, movie_title, top_n=5):
+    # Worst Case is O(m^2*n^2) due to the similarity calculation
+    def get_movie_recommendations(self, movie_title, top_n=10):
         # O(n*m), for matrix with dimensions n x m. Also O(n*m) because of self.tf_idf()
         tfidf_csr_matrix = csr_matrix(self.tf_idf().values)
         # O(n*m), n, rows in matrix, m number of columns in matrix
         similarities = cosine_similarity(tfidf_csr_matrix)
 
         movie_index = self.movie_title_df.loc[self.movie_title_df['title'] == self.fuzzy_matching(movie_title)].index[0]
-        similar_movies = list(enumerate(similarities[movie_index])) # O(n) for enumerating through all elements
+        similar_movies = list(enumerate(similarities[movie_index]))  # O(n) for enumerating through all elements
         similar_movies_sorted = sorted(similar_movies, key=lambda x: x[1], reverse=True)[1:]  # Exclude the movie itself
 
         top_similar_movies = similar_movies_sorted[:top_n]
-        recommendations = [self.movie_df.iloc[movie[0]]['movieId'] for movie in top_similar_movies]
+        recommendation_ids = [self.movie_df.iloc[movie[0]]['movieId'] for movie in top_similar_movies]
+
+        # O(n)
+        recommendations = []
+        for rec in recommendation_ids:
+            recommendations.append(self.get_movie_title(rec))
 
         return recommendations
 
